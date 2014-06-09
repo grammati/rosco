@@ -14,8 +14,8 @@
     - nil, if no trace-collection is in progress"
   nil)
 
-(def traces
-  "Atom containing a list of collected traces."
+(defonce traces
+  ;; Atom containing a list of collected traces.
   (atom nil))
 
 
@@ -81,34 +81,49 @@
   "Called when entering a traced function"
   [id v args]
   (swap! *trace-data* conj!
-         {:id    id
-          :var   v
-          :args  args
-          :type  :enter
-          :depth *trace-depth*
-          :t     (System/nanoTime)}))
+         {:id     id
+          :var    v
+          :args   args
+          :type   :enter
+          :depth  *trace-depth*
+          :thread (Thread/currentThread)
+          :t      (System/nanoTime)}))
 
 (defn trace-leave
-  "Called when leaving a traced function"
+  "Called when leaving a traced function normally"
   [id v ret]
   (swap! *trace-data* conj!
          {:id    id
           :var   v
-          :ret   ref
+          :ret   ret
           :type  :leave
           :depth *trace-depth*
           :t     (System/nanoTime)}))
 
+(defn trace-exception
+  "Called when unwinding through a traced function due to an exception"
+  [id v e]
+  (swap! *trace-data* conj!
+         {:id        id
+          :var       v
+          :exception e
+          :type      :exception
+          :depth     *trace-depth*
+          :t         (System/nanoTime)}))
 
 ;;; TODO - would this be faster as a macro? I want tracing to have the
 ;;; minimum possible impact on runtime.
 (defn- call-with-tracing [v f args]
   (let [call-id  (gensym "call")]
     (trace-enter call-id v args)
-    (let [ret (binding [*trace-depth* (inc *trace-depth*)]
-                (apply f args))]
-      (trace-leave call-id v ret)
-      ret)))
+    (try
+      (let [ret (binding [*trace-depth* (inc *trace-depth*)]
+                  (apply f args))]
+        (trace-leave call-id v ret)
+        ret)
+      (catch Throwable e
+        (trace-exception call-id v e)
+        (throw e)))))
 
 (defn wrap-tracing
   "Wrap a var such that a call to it will collect trace data if and
@@ -134,8 +149,7 @@
              (call-with-tracing v f args)
              (finally
                (swap! traces conj {:trace-id   trace-id
-                                   :trace-data (persistent! @*trace-data*)
-                                   :thread     (Thread/currentThread)}))))
+                                   :trace-data (persistent! @*trace-data*)}))))
 
          ;; Else: a trace collection is already in progress
          (call-with-tracing v f args)))))
@@ -226,39 +240,67 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Analysis and display of traces
 
+(defn- trace-data->tree
+  ([data]
+     (trace-data->tree data []))
+  ([[d & data] siblings]
+     {:pre [(or (nil? d) (= :enter (:type d)))]}
+     (if d
+       (let [[children [end & rest]]
+             (split-with #(> (:depth %) (:depth d)) data)
+             
+             this-call (-> d
+                           (assoc
+                               :children  (trace-data->tree children)
+                               :duration  (- (:t end) (:t d))
+                               :exception (:exception end))
+                           (dissoc :type))]
+         (concat siblings
+                 [this-call]
+                 (trace-data->tree rest)))
+       siblings)))
+
 (defn ->trace-info
   "Munge a collected trace into a nicer shape."
   [trace]
-  (loop [[d & [d2 & data2 :as data]] (:trace-data trace)
-         stack                       ()
-         call-tree                   {}]
-    (if d
-      (if (= (:id d) (:id d2))
-        ;; Bottom - append to the parent a single record con
-        (do (assert (and (= :enter (:type d)) (= :leave (:type d2))))
-            #_(recur data2 (assoc))))
-      call-tree)))
+  (trace-data->tree (:trace-data trace)))
 
-(defn- print-call-tree!
+;; (defn- print-call-tree!
+;;   "Prints the call tree from a trace."
+;;   [[d & data] start-times]
+;;   (when d
+;;     (println (apply str (repeat (:depth d) "  "))
+;;              ({:enter "=>" :leave "<="} (:type d) "??")
+;;              (:var d)
+;;              (if (= :leave (:type d))
+;;                (str (/ (- (:t d) (get start-times (:id d))) 1e6) " ms")
+;;                ""))
+;;     (recur data (if (= :enter (:type d))
+;;                   (assoc start-times (:id d) (:t d))
+;;                   start-times))))
+
+(defn- print-call-tree
   "Prints the call tree from a trace."
-  [[d & data] start-times]
-  (when d
-    (println (apply str (repeat (:depth d) "  "))
-             ({:enter "=>" :leave "<="} (:type d) "??")
-             (:var d)
-             (if (= :leave (:type d))
-               (str (/ (- (:t d) (get start-times (:id d))) 1e6) " ms")
-               ""))
-    (recur data (if (= :enter (:type d))
-                  (assoc start-times (:id d) (:t d))
-                  start-times))))
+  [calls]
+  (doseq [call calls]
+    (let [indent   (apply str (repeat (:depth call) "  "))
+          children (:children call)
+          name     (str (:var call))
+          time     (str (/ (:duration call) 1e6) "ms")]
+      (if (empty? children)
+        (println indent "==" name time)
+        (do
+          (println indent "=>" name)
+          (print-call-tree children)
+          (when-not (:exception call)
+            (println indent "<=" name time)))))))
 
-(defn print-trace!
+(defn print-trace
   "Prints out the last collected trace."
   ([]
-     (print-trace! (peek @traces)))
+     (print-trace (peek @traces)))
   ([trace]
-     (print-call-tree! (:trace-data trace) nil)))
+     (print-call-tree (->trace-info trace))))
 
 (defn clear-traces! []
   (reset! traces nil))
