@@ -39,16 +39,17 @@
       (is (= "xxxxxx" v))
       ;; NOTE: Only the entry and exit from the trace block are
       ;; recorded, since none of the functions are currently traced.
+      (trace/print-trace trace)
       (is (= 2 (count (:trace-data trace))))))
   
   (testing "trace macro inside with-tracing macro"
-   (let [[v trace] (trace/with-tracing [#'foo1]
-                     (trace/trace (foo4)))]
-     (is (= "xxxxxx" v))
-     ;; enter/leave root = 2, plus 6 enter/leave pairs for foo1 = 14
-     (is (= 14 (count (:trace-data trace))))
-     ;;(trace/print-trace! trace)
-     )))
+    (let [[v trace]
+          (trace/with-tracing [#'foo1]
+            (trace/trace (foo4)))]
+      (is (= "xxxxxx" v))
+      ;; enter/leave with-tracing = 2, enter/leave trace = 2, plus 6 enter/leave pairs for foo1
+      (is (= 16 (count (:trace-data trace))))
+      )))
 
 
 (defn- select-keys+ [m keys]

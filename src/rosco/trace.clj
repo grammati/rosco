@@ -14,6 +14,11 @@
     - nil, if no trace-collection is in progress"
   nil)
 
+(def ^:dynamic *verbose*
+  "If true, print when vars are traced and untraced."
+  nil)
+
+
 (defonce traces
   ;; Atom containing a list of collected traces.
   (atom nil))
@@ -40,6 +45,11 @@
   (cond
    (pattern? f) (partial re-matches f)
    :else        f))
+
+(defn ->var [x]
+  (if (var? x)
+    x
+    (ns-resolve *ns* x)))
 
 (defn ->ns
   "DWIM to get a namespace. Takes a string, namespace, or symbol."
@@ -86,7 +96,6 @@
           :args   args
           :type   :enter
           :depth  *trace-depth*
-          :thread (Thread/currentThread)
           :t      (System/nanoTime)}))
 
 (defn trace-leave
@@ -112,7 +121,8 @@
           :t         (System/nanoTime)}))
 
 ;;; TODO - would this be faster as a macro? I want tracing to have the
-;;; minimum possible impact on runtime.
+;;; minimum possible impact on runtime (both time and stack-depth)
+;;; TODO - do I really need the call-id?
 (defn- call-with-tracing [v f args]
   (let [call-id  (gensym "call")]
     (trace-enter call-id v args)
@@ -157,22 +167,34 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public API
 
+(defn traced?
+  "Returns true if the given var is currently traced."
+  [v]
+  {:pre [(var? v)]}
+  (when-let [hooks (#'robert.hooke/hooks v)]
+    (::trace @hooks)))
+
 (defn trace-var
   "Inject tracing into the var."
   [v]
-  (println "Tracing" v)
+  {:pre [(var? v)]}
+  (when *verbose* (println "Tracing" v))
   (add-hook v ::trace (wrap-tracing v)))
-
-(defn untrace-var
-  "Remove tracing from a var."
-  [v]
-  (println "Untracing" v)
-  (remove-hook v ::trace))
 
 (defn trace-root
   "Wrap a var so that calling it begins a trace collection."
   [v]
+  {:pre [(var? v)]}
+  (when *verbose* (println "Tracing root" v))
   (add-hook v ::trace (wrap-trace-root v)))
+
+(defn untrace-var
+  "Remove tracing from a var."
+  [v]
+  {:pre [(var? v)]}
+  (when (traced? v)
+    (println "Untracing" v)
+    (remove-hook v ::trace)))
 
 (defn trace-namespace
   "Add tracing to all vars in a namspace (optinally filtered by
@@ -207,6 +229,21 @@
      (doseq [ns (find-namespaces pred)]
        (untrace-namespace ns))))
 
+(defn trace-dwim
+  "Traces things. The argument specifies what to trace, and can be
+  regex, a var, or a qualified symbol."
+  [spec]
+  (if (pattern? spec)
+   (trace-namespaces spec)
+   (trace-var (->var spec))))
+
+(defn untrace-dwim
+  "Untraces things. See trace-dwim."
+  [spec]
+  (if (pattern? spec)
+   (untrace-namespaces spec)
+   (untrace-var (->var spec))))
+
 (defn get-trace
   "Return a captured trace, by id."
   [trace-id]
@@ -216,26 +253,36 @@
 
 (defn trace*
   "Calls the function while capturing a trace.
-  Returns at 2-tuple of the return-value and the captured trace."
+  Returns a 2-tuple of the return-value and the captured trace."
   [f & args]
   (let [trace-id (gensym "manual-trace")
         root-fn  (wrap-trace-root trace-id trace-id)
-        ret      (root-fn f)]
-    [ret (get-trace trace-id)]))
+        ret      (root-fn f)
+        ;; Unwrap nested traces
+        ret      (if (::trace-result (meta ret))
+                   (first ret)
+                   ret)]
+    ^::trace-result [ret (get-trace trace-id)]))
 
-(defmacro trace [& body]
+(defmacro trace
+  "Execute the body while capturing a trace.
+  Returns a 2-tuple of the return-value and the captured trace."
+  [& body]
   `(trace* (fn [] ~@body)))
 
-
-(defmacro with-tracing [traced-vars & body]
-  `(let [vars# ~traced-vars]
+(defmacro with-tracing
+  "Excutes the body while capturing a trace.
+  Takes a vector of regexes or vars, indicating what to trace.
+  Returns a 2-tupe of the return-value and the captured trace."
+  [trace-spec & body]
+  `(let [specs# ~trace-spec]
      (try
-       (doseq [v# vars#]
-         (trace-var v#))
-       ~@body
+       (doseq [spec# specs#]
+         (trace-dwim spec#))
+       (trace ~@body)
        (finally
-         (doseq [v# vars#]
-           (untrace-var v#))))))
+         (doseq [spec# specs#]
+           (untrace-dwim spec#))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Analysis and display of traces
