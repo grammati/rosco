@@ -1,5 +1,6 @@
 (ns rosco.ring
-  (:require [rosco.trace :as trace])
+  (:require [rosco.trace :as trace]
+            [cheshire.core :as json])
   (:import [java.util.concurrent.locks Lock ReadWriteLock ReentrantReadWriteLock]))
 
 
@@ -35,12 +36,13 @@
   Adds a header, x-rosco-trace, to the response, containing the id of
   the captured trace."
   ([handler]
-     (wrap-tracing handler #(get-in % [:params :trace])))
+     (wrap-tracing handler #(get-in % [:params "trace"])))
   ([handler should-trace?]
      (fn [request]
        (if (should-trace? request)
-         (let [[response trace-id] (trace/trace
-                                     (handler request))])
+         (let [[response trace] (trace/trace
+                                 (handler request))]
+           (assoc-in response [:headers "x-rosco-trace"] (:trace-id trace)))
          (handler request)))))
 
 (defn wrap-exclusive-tracing
@@ -58,19 +60,32 @@
   Adds a header, x-rosco-trace, to the response, containing the id of
   the captured trace."
   ([handler regexes]
-     (wrap-exclusive-tracing handler regexes #(get-in % [:params :trace])))
+     (wrap-exclusive-tracing handler regexes #(get-in % [:params "trace"])))
   
   ([handler regexes should-trace?]
      
      (assert (vector? regexes))
      (assert (pos? (count regexes)))
-     (assert (every? #'trace/pattern? regexes))
+     (assert (every? #(or (#'trace/pattern? %) (var? %)) regexes))
      
      (fn [request]
        (if (should-trace? request)
          (with-write-lock trace-lock
-           (let [[response trace-id] (trace/with-tracing regexes
-                                       (handler request))]
-             (assoc-in response [:headers "x-rosco-trace"] trace-id)))
+           (let [[response trace] (trace/with-tracing regexes
+                                    (handler request))]
+             (assoc-in response [:headers "x-rosco-trace"] (:trace-id trace))))
          (with-read-lock trace-lock
            (handler request))))))
+
+
+(defn get-trace
+  "Ring handler to return a JSON representation of a previously
+  captured trace."
+  [request]
+  (let [trace-id (get-in request [:params "trace-id"])
+        trace    (trace/get-trace trace-id)]
+    {:status  (if trace 200 404)
+     :headers {"content-type" "application/json"}
+     :body    (json/encode
+               (or trace {:error "trace not found"}))}))
+

@@ -124,7 +124,7 @@
 ;;; minimum possible impact on runtime (both time and stack-depth)
 ;;; TODO - do I really need the call-id?
 (defn- call-with-tracing [v f args]
-  (let [call-id  (gensym "call")]
+  (let [call-id  (str (gensym "call"))]
     (trace-enter call-id v args)
     (try
       (let [ret (binding [*trace-depth* (inc *trace-depth*)]
@@ -148,7 +148,7 @@
   "Wrap a var such that calling it begins a trace collection, if one
   is not already in progress."
   ([v]
-     (wrap-trace-root v (gensym "trace")))
+     (wrap-trace-root v (str (gensym "trace"))))
   ([v trace-id]
      (fn [f & args]
        (if (nil? *trace-data*)
@@ -192,9 +192,9 @@
   "Remove tracing from a var."
   [v]
   {:pre [(var? v)]}
-  (when (traced? v)
-    (println "Untracing" v)
-    (remove-hook v ::trace)))
+  (when (and *verbose* (traced? v))
+    (println "Untracing" v))
+  (remove-hook v ::trace))
 
 (defn trace-namespace
   "Add tracing to all vars in a namspace (optinally filtered by
@@ -255,7 +255,7 @@
   "Calls the function while capturing a trace.
   Returns a 2-tuple of the return-value and the captured trace."
   [f & args]
-  (let [trace-id (gensym "manual-trace")
+  (let [trace-id (str (gensym "manual-trace"))
         root-fn  (wrap-trace-root trace-id trace-id)
         ret      (root-fn f)
         ;; Unwrap nested traces
