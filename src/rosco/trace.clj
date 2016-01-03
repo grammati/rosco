@@ -2,7 +2,6 @@
   (:require [clojure.edn :as edn]
             [robert.hooke :refer [add-hook remove-hook]]))
 
-
 (def ^:dynamic *trace-depth*
   "Thread-local stack-depth into traced functions"
   0)
@@ -18,11 +17,9 @@
   "If true, print when vars are traced and untraced."
   nil)
 
-
 (defonce traces
   ;; Atom containing a list of collected traces.
   (atom nil))
-
 
 ;;; Utilities and stuff
 
@@ -37,14 +34,14 @@
 
 (defn- ->name [x]
   (cond
-   (named? x)     (name x)
-   (var? x)       (-> x meta :name name)
-   (namespace? x) (-> x .name name)))
+    (named? x)     (name x)
+    (var? x)       (-> x meta :name name)
+    (namespace? x) (-> x .name name)))
 
 (defn ->pred [f]
   (cond
-   (pattern? f) (partial re-matches f)
-   :else        f))
+    (pattern? f) (partial re-matches f)
+    :else        f))
 
 (defn ->var [x]
   (if (var? x)
@@ -55,20 +52,20 @@
   "DWIM to get a namespace. Takes a string, namespace, or symbol."
   [ns]
   (cond
-   (string? ns) (->ns (edn/read-string ns))
-   :else        (the-ns ns)))
+    (string? ns) (->ns (edn/read-string ns))
+    :else        (the-ns ns)))
 
 (defn ns-vars
   "Returns a sequence of the vars in a namespace, optionally fitlered
   by the predicate, which can be a function taking a Var, or a pattern
   to match the Var's name."
   ([ns]
-     (ns-vars ns (constantly true)))
+   (ns-vars ns (constantly true)))
   ([ns pred]
-     (let [pred (if (pattern? pred)
-                  #(re-matches pred (->name %))
-                  pred)]
-       (->> ns ->ns ns-interns vals (filter pred)))))
+   (let [pred (if (pattern? pred)
+                #(re-matches pred (->name %))
+                pred)]
+     (->> ns ->ns ns-interns vals (filter pred)))))
 
 (defn find-namespaces
   "Returns a sequence of loaded namespaces whose names match the given
@@ -85,7 +82,6 @@
        (fn? @v)
        (not (:macro (meta v)))
        (not (:no-trace (meta v)))))
-
 
 (defn trace-enter
   "Called when entering a traced function"
@@ -148,21 +144,21 @@
   "Wrap a var such that calling it begins a trace collection, if one
   is not already in progress."
   ([v]
-     (wrap-trace-root v (str (gensym "trace"))))
+   (wrap-trace-root v (str (gensym "trace"))))
   ([v trace-id]
-     (fn [f & args]
-       (if (nil? *trace-data*)
-         
+   (fn [f & args]
+     (if (nil? *trace-data*)
+
          ;; Set up a new trace collection
-         (binding [*trace-data* (atom (transient []))]
-           (try
-             (call-with-tracing v f args)
-             (finally
-               (swap! traces conj {:trace-id   trace-id
-                                   :trace-data (persistent! @*trace-data*)}))))
+       (binding [*trace-data* (atom (transient []))]
+         (try
+           (call-with-tracing v f args)
+           (finally
+             (swap! traces conj {:trace-id   trace-id
+                                 :trace-data (persistent! @*trace-data*)}))))
 
          ;; Else: a trace collection is already in progress
-         (call-with-tracing v f args)))))
+       (call-with-tracing v f args)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public API
@@ -200,49 +196,49 @@
   "Add tracing to all vars in a namspace (optinally filtered by
   predicate or pattern)"
   ([]
-     (trace-namespace *ns*))
+   (trace-namespace *ns*))
   ([ns]
-     (trace-namespace ns traceable?))
+   (trace-namespace ns traceable?))
   ([ns var-pred]
-     (doseq [v (ns-vars ns var-pred)]
-       (trace-var v))))
+   (doseq [v (ns-vars ns var-pred)]
+     (trace-var v))))
 
 (defn untrace-namespace
   "Remove tracing from all vars in a namespace."
   ([]
-     (untrace-namespace *ns*))
+   (untrace-namespace *ns*))
   ([ns]
-     (doseq [v (ns-vars ns)]
-       (untrace-var v))))
+   (doseq [v (ns-vars ns)]
+     (untrace-var v))))
 
 (defn trace-namespaces
   "Traces all loaded namespaces whose names match the given regular expression."
   ([ns-pred]
-     (trace-namespaces ns-pred traceable?))
+   (trace-namespaces ns-pred traceable?))
   ([ns-pred var-pred]
-     (doseq [ns (find-namespaces ns-pred)]
-       (trace-namespace ns var-pred))))
+   (doseq [ns (find-namespaces ns-pred)]
+     (trace-namespace ns var-pred))))
 
 (defn untrace-namespaces
   "Untrace namespaces whose names match the given predicate or pattern"
   ([pred]
-     (doseq [ns (find-namespaces pred)]
-       (untrace-namespace ns))))
+   (doseq [ns (find-namespaces pred)]
+     (untrace-namespace ns))))
 
 (defn trace-dwim
   "Traces things. The argument specifies what to trace, and can be
   regex, a var, or a qualified symbol."
   [spec]
   (if (pattern? spec)
-   (trace-namespaces spec)
-   (trace-var (->var spec))))
+    (trace-namespaces spec)
+    (trace-var (->var spec))))
 
 (defn untrace-dwim
   "Untraces things. See trace-dwim."
   [spec]
   (if (pattern? spec)
-   (untrace-namespaces spec)
-   (untrace-var (->var spec))))
+    (untrace-namespaces spec)
+    (untrace-var (->var spec))))
 
 (defn get-trace
   "Return a captured trace, by id."
@@ -289,23 +285,23 @@
 
 (defn- trace-data->tree
   ([data]
-     (trace-data->tree data []))
+   (trace-data->tree data []))
   ([[d & data] siblings]
-     {:pre [(or (nil? d) (= :enter (:type d)))]}
-     (if d
-       (let [[children [end & rest]]
-             (split-with #(> (:depth %) (:depth d)) data)
-             
-             this-call (-> d
-                           (assoc
-                               :children  (trace-data->tree children)
-                               :duration  (- (:t end) (:t d))
-                               :exception (:exception end))
-                           (dissoc :type))]
-         (concat siblings
-                 [this-call]
-                 (trace-data->tree rest)))
-       siblings)))
+   {:pre [(or (nil? d) (= :enter (:type d)))]}
+   (if d
+     (let [[children [end & rest]]
+           (split-with #(> (:depth %) (:depth d)) data)
+
+           this-call (-> d
+                         (assoc
+                          :children  (trace-data->tree children)
+                          :duration  (- (:t end) (:t d))
+                          :exception (:exception end))
+                         (dissoc :type))]
+       (concat siblings
+               [this-call]
+               (trace-data->tree rest)))
+     siblings)))
 
 (defn ->trace-info
   "Munge a collected trace into a nicer shape."
@@ -345,9 +341,9 @@
 (defn print-trace
   "Prints out the last collected trace."
   ([]
-     (print-trace (peek @traces)))
+   (print-trace (peek @traces)))
   ([trace]
-     (print-call-tree (->trace-info trace))))
+   (print-call-tree (->trace-info trace))))
 
 (defn clear-traces! []
   (reset! traces nil))

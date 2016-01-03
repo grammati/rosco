@@ -2,7 +2,6 @@
   (:require [clojure.test :refer :all]
             [ring.mock.request :as mock]
             [rosco.ring :as ring]
-            [cheshire.core :as json]
             [ring.middleware.params :refer [wrap-params]]))
 
 
@@ -30,6 +29,10 @@
   (-> ring/get-trace
       wrap-params))
 
+(defn- read-trace [s]
+  (binding [*data-readers* (assoc *data-readers* 'object identity)]
+    (read-string s)))
+
 (deftest test-ring-tracing
   (let [resp (handler (mock/request :get "/foo"))]
     (is (nil? (get-in resp [:headers "x-rosco-trace"]))))
@@ -38,6 +41,7 @@
     (is trace-id)
     (let [resp (get-trace-json (mock/request :get (str "/?trace-id=" trace-id)))]
       (is (= 200 (:status resp)))
-      (let [trace (json/decode (:body resp))]
+      (let [trace (read-trace (:body resp))]
         (is trace)
-        (>pprint trace)))))
+        ;(>pprint trace)
+        ))))
