@@ -42,6 +42,4 @@
     (let [resp (get-trace-json (mock/request :get (str "/?trace-id=" trace-id)))]
       (is (= 200 (:status resp)))
       (let [trace (read-trace (:body resp))]
-        (is trace)
-        ;(>pprint trace)
-        ))))
+        (is trace)))))

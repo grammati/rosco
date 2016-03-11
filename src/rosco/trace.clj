@@ -339,11 +339,14 @@
             (println indent "<=" name time)))))))
 
 (defn print-trace
-  "Prints out the last collected trace."
-  ([]
-   (print-trace (peek @traces)))
-  ([trace]
-   (print-call-tree (->trace-info trace))))
+  "Prints the given trace."
+  [trace]
+  (print-call-tree (->trace-info trace)))
+
+(defn print-last-trace
+  "Prints the most recently captured trace."
+  []
+  (print-trace (peek @traces)))
 
 (defn clear-traces! []
   (reset! traces nil))

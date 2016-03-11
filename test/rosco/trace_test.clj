@@ -1,5 +1,5 @@
 (ns rosco.trace-test
-  (:require [rosco.trace :as trace]
+  (:require [rosco.trace :as trace :refer [*trace-depth*]]
             [clojure.test :refer :all]))
 
 
@@ -20,7 +20,7 @@
 
 
 (deftest test-tracing
-  
+
   (testing "trace-namespace with pattern"
     (try
       (trace/trace-namespace 'rosco.trace-test #"foo.*" )
@@ -29,11 +29,11 @@
       ;; calls: 1 to foo4, 1 to foo3, 2 to foo2, 6 to foo1 = 10
       ;; enter/leave for each = 20 data entries
       (is (= 20 (-> @trace/traces peek :trace-data count)))
-      (trace/print-trace)
+      (trace/print-last-trace)
       (finally
         (trace/untrace-namespace 'rosco.trace-test)
         (trace/clear-traces!))))
-  
+
   (testing "using trace macro"
     (let [[v trace] (trace/trace (foo4))]
       (is (= "xxxxxx" v))
@@ -41,7 +41,7 @@
       ;; recorded, since none of the functions are currently traced.
       (trace/print-trace trace)
       (is (= 2 (count (:trace-data trace))))))
-  
+
   (testing "trace macro inside with-tracing macro"
     (let [[v trace]
           (trace/with-tracing [#'foo1]
@@ -49,7 +49,10 @@
       (is (= "xxxxxx" v))
       ;; enter/leave with-tracing = 2, enter/leave trace = 2, plus 6 enter/leave pairs for foo1
       (is (= 16 (count (:trace-data trace))))
-      )))
+      ))
+
+  (testing "with an exception thrown"
+    ))
 
 
 (defn- select-keys+ [m keys]
@@ -62,10 +65,10 @@
                     m))
                 nil
                 (select-keys m keys)))
-   
+
    (sequential? m)
    (mapv #(select-keys+ % keys) m)
-   
+
    :else
    m))
 
@@ -93,5 +96,3 @@
                      :t 0}]
           actual   (select-keys+ tree [:var :duration :children :id :t])]
       (is (= expected actual)))))
-
-

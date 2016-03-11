@@ -2,7 +2,6 @@
   (:require [rosco.trace :as trace])
   (:import [java.util.concurrent.locks ReadWriteLock ReentrantReadWriteLock]))
 
-
 (defonce trace-lock (ReentrantReadWriteLock. true))
 
 (defn with-read-lock* [^ReadWriteLock lock f]
@@ -27,7 +26,6 @@
 (defmacro with-write-lock [read-write-lock & body]
   `(with-write-lock* ~read-write-lock (fn [] ~@body)))
 
-
 (defn wrap-tracing
   "Ring middleware to cature a trace of the request.
 
@@ -41,14 +39,14 @@
   Adds a header, x-rosco-trace, to the response, containing the id of
   the captured trace."
   ([handler]
-     (wrap-tracing handler #(get-in % [:params "trace"])))
+   (wrap-tracing handler #(get-in % [:params "trace"])))
   ([handler should-trace?]
-     (fn [request]
-       (if (should-trace? request)
-         (let [[response trace] (trace/trace
-                                 (handler request))]
-           (assoc-in response [:headers "x-rosco-trace"] (:trace-id trace)))
-         (handler request)))))
+   (fn [request]
+     (if (should-trace? request)
+       (let [[response trace] (trace/trace
+                               (handler request))]
+         (assoc-in response [:headers "x-rosco-trace"] (:trace-id trace)))
+       (handler request)))))
 
 (defn wrap-exclusive-tracing
   "Ring middleware to inject tracing into vars, capture a trace of the
@@ -65,22 +63,22 @@
   Adds a header, x-rosco-trace, to the response, containing the id of
   the captured trace."
   ([handler regexes]
-     (wrap-exclusive-tracing handler regexes #(get-in % [:params "trace"])))
+   (wrap-exclusive-tracing handler regexes #(get-in % [:params "trace"])))
 
   ([handler regexes should-trace?]
 
-     (assert (vector? regexes))
-     (assert (pos? (count regexes)))
-     (assert (every? #(or (#'trace/pattern? %) (var? %)) regexes))
+   (assert (vector? regexes))
+   (assert (pos? (count regexes)))
+   (assert (every? #(or (#'trace/pattern? %) (var? %)) regexes))
 
-     (fn [request]
-       (if (should-trace? request)
-         (with-write-lock trace-lock
-           (let [[response trace] (trace/with-tracing regexes
-                                    (handler request))]
-             (assoc-in response [:headers "x-rosco-trace"] (:trace-id trace))))
-         (with-read-lock trace-lock
-           (handler request))))))
+   (fn [request]
+     (if (should-trace? request)
+       (with-write-lock trace-lock
+         (let [[response trace] (trace/with-tracing regexes
+                                  (handler request))]
+           (assoc-in response [:headers "x-rosco-trace"] (:trace-id trace))))
+       (with-read-lock trace-lock
+         (handler request))))))
 
 (defn get-trace
   "Ring handler to return a JSON representation of a previously
