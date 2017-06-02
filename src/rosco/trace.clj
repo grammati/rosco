@@ -148,8 +148,7 @@
   ([v trace-id]
    (fn [f & args]
      (if (nil? *trace-data*)
-
-         ;; Set up a new trace collection
+       ;; Set up a new trace collection
        (binding [*trace-data* (atom (transient []))]
          (try
            (call-with-tracing v f args)
@@ -157,7 +156,7 @@
              (swap! traces conj {:trace-id   trace-id
                                  :trace-data (persistent! @*trace-data*)}))))
 
-         ;; Else: a trace collection is already in progress
+       ;; Else: a trace collection is already in progress
        (call-with-tracing v f args)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -251,7 +250,7 @@
   "Calls the function while capturing a trace.
   Returns a 2-tuple of the return-value and the captured trace."
   [f & args]
-  (let [trace-id (str (gensym "manual-trace"))
+  (let [trace-id (str (gensym "trace"))
         root-fn  (wrap-trace-root trace-id trace-id)
         ret      (root-fn f)
         ;; Unwrap nested traces

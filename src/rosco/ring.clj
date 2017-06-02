@@ -87,5 +87,5 @@
   (let [trace-id (get-in request [:params "trace-id"])
         trace    (trace/get-trace trace-id)]
     {:status  (if trace 200 404)
-     :headers {"content-type" "application/json"}
+     :headers {"content-type" "application/edn"}
      :body    (pr-str (or trace {:error "trace not found"}))}))
