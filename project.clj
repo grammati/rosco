@@ -13,7 +13,7 @@
 
   :garden {:builds [{:id           "screen"
                      :source-paths ["src/clj"]
-                     :stylesheet   rosco.css/screen
+                     :stylesheet   rosco.ui.css/screen
                      :compiler     {:output-to     "resources/public/css/screen.css"
                                     :pretty-print? true}}]}
 
@@ -34,7 +34,8 @@
                          [lein-doo "0.1.7"]
                          [lein-garden "0.2.8"]]
           :repl-options {:nrepl-middleware [cemerick.piggieback/wrap-cljs-repl]}
-          :prep-tasks   [["cljsbuild" "once" "min"]["garden" "once"] "compile"]}
+          ;; :prep-tasks   [["cljsbuild" "once" "min"]["garden" "once"] "compile"]
+          }
 
    :dev [:cljs
          {:dependencies [[ring "1.6.1"]

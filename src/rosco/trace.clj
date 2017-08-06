@@ -1,6 +1,5 @@
 (ns rosco.trace
-  (:require [clojure.edn :as edn]
-            [robert.hooke :refer [add-hook remove-hook]]))
+  (:require [clojure.edn :as edn]))
 
 (def ^:dynamic *trace-depth*
   "Thread-local stack-depth into traced functions"
@@ -131,14 +130,23 @@
         (trace-exception call-id v e)
         (throw e)))))
 
+(defn original [v]
+  (::original (meta @v)))
+
+(defn traced?
+  "Returns true if the given var is currently traced."
+  [v]
+  (some? (original v)))
+
 (defn wrap-tracing
   "Wrap a var such that a call to it will collect trace data if and
   only if a trace is already in-progress."
   [v]
-  (fn [f & args]
-    (if *trace-data*
-      (call-with-tracing v f args)
-      (apply f args))))
+  (let [f (or (original v) @v)]
+    (fn [& args]
+      (if *trace-data*
+        (call-with-tracing v f args)
+        (apply f args)))))
 
 (defn wrap-trace-root
   "Wrap a var such that calling it begins a trace collection, if one
@@ -146,42 +154,36 @@
   ([v]
    (wrap-trace-root v (str (gensym "trace"))))
   ([v trace-id]
-   (fn [f & args]
-     (if (nil? *trace-data*)
-       ;; Set up a new trace collection
-       (binding [*trace-data* (atom (transient []))]
-         (try
-           (call-with-tracing v f args)
-           (finally
-             (swap! traces conj {:trace-id   trace-id
-                                 :trace-data (persistent! @*trace-data*)}))))
+   (let [f (or (original v) @v)]
+     (fn [& args]
+       (if (nil? *trace-data*)
+         ;; Set up a new trace collection
+         (binding [*trace-data* (atom (transient []))]
+           (try
+             (call-with-tracing v f args)
+             (finally
+               (swap! traces conj {:trace-id   trace-id
+                                   :trace-data (persistent! @*trace-data*)}))))
 
-       ;; Else: a trace collection is already in progress
-       (call-with-tracing v f args)))))
+         ;; Else: a trace collection is already in progress
+         (call-with-tracing v f args))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public API
-
-(defn traced?
-  "Returns true if the given var is currently traced."
-  [v]
-  {:pre [(var? v)]}
-  (when-let [hooks (#'robert.hooke/hooks v)]
-    (::trace @hooks)))
 
 (defn trace-var
   "Inject tracing into the var."
   [v]
   {:pre [(var? v)]}
   (when *verbose* (println "Tracing" v))
-  (add-hook v ::trace (wrap-tracing v)))
+  (alter-var-root v (constantly (with-meta (wrap-tracing v) {::original @v}))))
 
 (defn trace-root
   "Wrap a var so that calling it begins a trace collection."
   [v]
   {:pre [(var? v)]}
   (when *verbose* (println "Tracing root" v))
-  (add-hook v ::trace (wrap-trace-root v)))
+  (alter-var-root v (constantly (with-meta (wrap-trace-root v) {::original @v}))))
 
 (defn untrace-var
   "Remove tracing from a var."
@@ -189,7 +191,7 @@
   {:pre [(var? v)]}
   (when (and *verbose* (traced? v))
     (println "Untracing" v))
-  (remove-hook v ::trace))
+  (alter-var-root v (constantly (original v))))
 
 (defn trace-namespace
   "Add tracing to all vars in a namspace (optinally filtered by
