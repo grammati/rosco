@@ -1,76 +1,54 @@
 (ns rosco.trace-test
-  (:require [rosco.trace :as trace :refer [*trace-depth*]]
-            [clojure.test :refer :all]))
+  (:require [clojure.test :refer :all]
+            [rosco.trace :as trace]
+            [rosco.test.ns1 :as ns1]))
 
+(deftest test-trace-namespace-with-pattern
+  (try
+    (trace/trace-namespace 'rosco.test.ns1 #"foo.*")
+    (ns1/foo4)
+    ;; calls: 1 to foo4, 1 to foo3, 2 to foo2, 6 to foo1 = 10
+    ;; enter/leave for each = 20 data entries
+    (is (= 20 (-> @trace/traces peek :trace-data count)))
+    (trace/print-last-trace)
+    (finally
+      (trace/untrace-namespace 'rosco.test.ns1)
+      (trace/clear-traces!))))
 
-(defn foo1 []
-  (Thread/sleep 10)
-  "x")
+(deftest test-with-tracing-macro
+  (let [[v trace] (trace/with-tracing [#"rosco.test.ns1"]
+                    (ns1/foo4))]
+    (is (= "xxxxxx" v))
+    (trace/print-trace trace)
+    (is (= 22 (count (:trace-data trace))))))
 
-(defn foo2 []
-  (str (foo1) (foo1)))
+(deftest trace-macro-inside-with-tracing-macro
+  (let [[v trace]
+        (trace/with-tracing [#'ns1/foo1]
+          (ns1/foo4))]
+    (is (= "xxxxxx" v))
+    ;; enter/leave with-tracing = 2, plus 6 enter/leave pairs for foo1
+    (trace/print-trace trace)
+    (is (= 14 (count (:trace-data trace))))))
 
-(defn foo3 []
-  (str (foo1) (foo2)))
-
-(defn foo4 []
-  (str (foo1) (foo2) (foo3)))
-
-
-
-
-(deftest test-tracing
-
-  (testing "trace-namespace with pattern"
-    (try
-      (trace/trace-namespace 'rosco.trace-test #"foo.*" )
-      (trace/trace-root #'foo4)
-      (foo4)
-      ;; calls: 1 to foo4, 1 to foo3, 2 to foo2, 6 to foo1 = 10
-      ;; enter/leave for each = 20 data entries
-      (is (= 20 (-> @trace/traces peek :trace-data count)))
-      (trace/print-last-trace)
-      (finally
-        (trace/untrace-namespace 'rosco.trace-test)
-        (trace/clear-traces!))))
-
-  (testing "using trace macro"
-    (let [[v trace] (trace/trace (foo4))]
-      (is (= "xxxxxx" v))
-      ;; NOTE: Only the entry and exit from the trace block are
-      ;; recorded, since none of the functions are currently traced.
-      (trace/print-trace trace)
-      (is (= 2 (count (:trace-data trace))))))
-
-  (testing "trace macro inside with-tracing macro"
-    (let [[v trace]
-          (trace/with-tracing [#'foo1]
-            (trace/trace (foo4)))]
-      (is (= "xxxxxx" v))
-      ;; enter/leave with-tracing = 2, enter/leave trace = 2, plus 6 enter/leave pairs for foo1
-      (is (= 16 (count (:trace-data trace))))
-      ))
-
-  (testing "with an exception thrown"
-    ))
-
+;; (deftest "with an exception thrown")
 
 (defn- select-keys+ [m keys]
   (cond
-   (map? m)
-   (let [keys (set keys)]
-     (reduce-kv (fn [m k v]
-                  (if (keys k)
-                    (assoc m k (select-keys+ v keys))
-                    m))
-                nil
-                (select-keys m keys)))
+    (map? m)
+    (let [keys (set keys)]
+      (reduce-kv (fn [m k v]
+                   (if (keys k)
+                     (assoc m k (select-keys+ v keys))
+                     m))
+                 nil
+                 (select-keys m keys)))
 
-   (sequential? m)
-   (mapv #(select-keys+ % keys) m)
+    (sequential? m)
+    (mapv #(select-keys+ % keys) m)
 
-   :else
-   m))
+    :else
+    m))
 
 (deftest test->trace-info
   (let [t {:trace-data [{:id 1 :var :a :type :enter :t 0 :depth 1}

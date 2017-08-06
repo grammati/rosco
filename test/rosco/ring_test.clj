@@ -21,7 +21,7 @@
 (def handler
   (-> foo-handler
       wrap-bar
-      (ring/wrap-exclusive-tracing [#"rosco.ring-test.foo.*"])
+      (ring/wrap-tracing [#"rosco.ring-test.foo.*"])
       wrap-params))
 
 
@@ -42,4 +42,5 @@
     (let [resp (get-trace-json (mock/request :get (str "/?trace-id=" trace-id)))]
       (is (= 200 (:status resp)))
       (let [trace (read-trace (:body resp))]
-        (is trace)))))
+        (is trace)
+        (>pprint trace)))))

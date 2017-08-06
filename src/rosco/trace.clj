@@ -1,5 +1,7 @@
 (ns rosco.trace
-  (:require [clojure.edn :as edn]))
+  (:require [clojure.edn :as edn])
+  (:import clojure.lang.Namespace
+           java.util.concurrent.atomic.AtomicLong))
 
 (def ^:dynamic *trace-depth*
   "Thread-local stack-depth into traced functions"
@@ -15,6 +17,10 @@
 (def ^:dynamic *verbose*
   "If true, print when vars are traced and untraced."
   nil)
+
+(defn- dbg [& msgs]
+  (when *verbose*
+    (apply println msgs)))
 
 (defonce traces
   ;; Atom containing a list of collected traces.
@@ -35,7 +41,7 @@
   (cond
     (named? x)     (name x)
     (var? x)       (-> x meta :name name)
-    (namespace? x) (-> x .name name)))
+    (namespace? x) (-> ^Namespace x .name name)))
 
 (defn ->pred [f]
   (cond
@@ -84,53 +90,46 @@
 
 (defn trace-enter
   "Called when entering a traced function"
-  [id v args]
-  (swap! *trace-data* conj!
-         {:id     id
-          :var    v
-          :args   args
-          :type   :enter
-          :depth  *trace-depth*
-          :t      (System/nanoTime)}))
+  ([id args]
+   (trace-enter id args nil))
+  ([id args v]
+   (swap! *trace-data* conj!
+          {:id     id
+           :var    v
+           :args   args
+           :type   :enter
+           :depth  *trace-depth*
+           :t      (System/nanoTime)})))
 
 (defn trace-leave
   "Called when leaving a traced function normally"
-  [id v ret]
-  (swap! *trace-data* conj!
-         {:id    id
-          :var   v
-          :ret   ret
-          :type  :leave
-          :depth *trace-depth*
-          :t     (System/nanoTime)}))
+  ([id ret]
+   (trace-leave id ret nil))
+  ([id ret v]
+   (swap! *trace-data* conj!
+          {:id    id
+           :var   v
+           :ret   ret
+           :type  :leave
+           :depth *trace-depth*
+           :t     (System/nanoTime)})))
 
 (defn trace-exception
   "Called when unwinding through a traced function due to an exception"
-  [id v e]
-  (swap! *trace-data* conj!
-         {:id        id
-          :var       v
-          :exception e
-          :type      :exception
-          :depth     *trace-depth*
-          :t         (System/nanoTime)}))
+  ([id e]
+   (trace-exception id e nil))
+  ([id e v]
+   (swap! *trace-data* conj!
+          {:id        id
+           :var       v
+           :exception e
+           :type      :exception
+           :depth     *trace-depth*
+           :t         (System/nanoTime)})))
 
-;;; TODO - would this be faster as a macro? I want tracing to have the
-;;; minimum possible impact on runtime (both time and stack-depth)
-;;; TODO - do I really need the call-id?
-(defn- call-with-tracing [v f args]
-  (let [call-id  (str (gensym "call"))]
-    (trace-enter call-id v args)
-    (try
-      (let [ret (binding [*trace-depth* (inc *trace-depth*)]
-                  (apply f args))]
-        (trace-leave call-id v ret)
-        ret)
-      (catch Throwable e
-        (trace-exception call-id v e)
-        (throw e)))))
-
-(defn original [v]
+(defn original
+  "Returns the original, untraced function for the given var"
+  [v]
   (::original (meta @v)))
 
 (defn traced?
@@ -138,35 +137,55 @@
   [v]
   (some? (original v)))
 
-(defn wrap-tracing
-  "Wrap a var such that a call to it will collect trace data if and
-  only if a trace is already in-progress."
+(defonce ^:private ^AtomicLong call-id (AtomicLong.))
+
+(defmacro next-id []
+  `(.incrementAndGet call-id))
+
+;;; TODO - would this be faster as a macro? I want tracing to have the
+;;; minimum possible impact on runtime (both time and stack-depth)
+;;; TODO - do I really need the call-id?
+(defn- call-with-tracing
+  "Capture trace data around execution of the given function, applied to the
+  given args. A trace collection needs to already be in progress on this
+  thread."
+  [f args v]
+  (let [call-id (next-id)]
+    (trace-enter call-id args v)
+    (try
+      (let [ret (binding [*trace-depth* (inc *trace-depth*)]
+                  (apply f args))]
+        (trace-leave call-id ret v)
+        ret)
+      (catch Throwable e
+        (trace-exception call-id e v)
+        (throw e)))))
+
+(defn with-trace-capture
+  "Begin capturing a new trace."
+  [f args v]
+  (let [trace-id (str "trace-" (next-id))]
+    (binding [*trace-data* (atom (transient []))]
+      (try
+        (call-with-tracing f args v)
+        (finally
+          (swap! traces conj {:trace-id   trace-id
+                              :trace-data (persistent! @*trace-data*)}))))))
+
+(defn- wrap-tracing
+  "Given a var, return the function in the var wrapped such that calls to it
+  will capture tracing data.."
   [v]
   (let [f (or (original v) @v)]
-    (fn [& args]
-      (if *trace-data*
-        (call-with-tracing v f args)
-        (apply f args)))))
+    (with-meta
+      (fn [& args]
+        (if *trace-data*
+          (call-with-tracing f args v)
+          (with-trace-capture f args v)))
+      {::original f})))
 
-(defn wrap-trace-root
-  "Wrap a var such that calling it begins a trace collection, if one
-  is not already in progress."
-  ([v]
-   (wrap-trace-root v (str (gensym "trace"))))
-  ([v trace-id]
-   (let [f (or (original v) @v)]
-     (fn [& args]
-       (if (nil? *trace-data*)
-         ;; Set up a new trace collection
-         (binding [*trace-data* (atom (transient []))]
-           (try
-             (call-with-tracing v f args)
-             (finally
-               (swap! traces conj {:trace-id   trace-id
-                                   :trace-data (persistent! @*trace-data*)}))))
-
-         ;; Else: a trace collection is already in progress
-         (call-with-tracing v f args))))))
+(defn- reset-var-root! [v val]
+  (alter-var-root v (constantly val)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public API
@@ -175,23 +194,19 @@
   "Inject tracing into the var."
   [v]
   {:pre [(var? v)]}
-  (when *verbose* (println "Tracing" v))
-  (alter-var-root v (constantly (with-meta (wrap-tracing v) {::original @v}))))
-
-(defn trace-root
-  "Wrap a var so that calling it begins a trace collection."
-  [v]
-  {:pre [(var? v)]}
-  (when *verbose* (println "Tracing root" v))
-  (alter-var-root v (constantly (with-meta (wrap-trace-root v) {::original @v}))))
+  (if (traced? v)
+    (dbg "Already traced" v)
+    (do
+      (dbg "Tracing" v)
+      (reset-var-root! v (wrap-tracing v)))))
 
 (defn untrace-var
   "Remove tracing from a var."
   [v]
   {:pre [(var? v)]}
-  (when (and *verbose* (traced? v))
-    (println "Untracing" v))
-  (alter-var-root v (constantly (original v))))
+  (when (traced? v)
+    (dbg "Untracing" v)
+    (reset-var-root! v (original v))))
 
 (defn trace-namespace
   "Add tracing to all vars in a namspace (optinally filtered by
@@ -248,38 +263,26 @@
        (filter #(= trace-id (:trace-id %)))
        first))
 
-(defn trace*
-  "Calls the function while capturing a trace.
-  Returns a 2-tuple of the return-value and the captured trace."
-  [f & args]
-  (let [trace-id (str (gensym "trace"))
-        root-fn  (wrap-trace-root trace-id trace-id)
-        ret      (root-fn f)
-        ;; Unwrap nested traces
-        ret      (if (::trace-result (meta ret))
-                   (first ret)
-                   ret)]
-    ^::trace-result [ret (get-trace trace-id)]))
+(defn get-last-trace []
+  (peek @traces))
 
-(defmacro trace
-  "Execute the body while capturing a trace.
-  Returns a 2-tuple of the return-value and the captured trace."
-  [& body]
-  `(trace* (fn [] ~@body)))
+(defn with-tracing* [trace-specs f]
+  (try
+    (doseq [spec trace-specs]
+      (trace-dwim spec))
+    (let [ret (with-trace-capture f nil nil)]
+      ;; FIXME: race condition here - (get-last-trace) may not return the one we just captured
+      [ret (get-last-trace)])
+    (finally
+      (doseq [spec trace-specs]
+        (untrace-dwim spec)))))
 
 (defmacro with-tracing
   "Excutes the body while capturing a trace.
   Takes a vector of regexes or vars, indicating what to trace.
   Returns a 2-tupe of the return-value and the captured trace."
-  [trace-spec & body]
-  `(let [specs# ~trace-spec]
-     (try
-       (doseq [spec# specs#]
-         (trace-dwim spec#))
-       (trace ~@body)
-       (finally
-         (doseq [spec# specs#]
-           (untrace-dwim spec#))))))
+  [trace-specs & body]
+  `(with-tracing* ~trace-specs (fn [] ~@body)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Analysis and display of traces
